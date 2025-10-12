@@ -1,10 +1,11 @@
+//ClienteHome.tsx
 import { addDoc, collection, onSnapshot } from 'firebase/firestore';
 import React, { useEffect, useState } from 'react';
 import { Button, FlatList, View } from 'react-native';
-import Carrito from '../components/Carrito';
-import ProductoItem from '../components/PedidoItem';
-import { auth, db } from '../firebase/config';
-import { Product } from '../models/Producto';
+import Carrito from '../../components/Carrito';
+import ProductoItem from '../../components/PedidoItem';
+import { auth, db } from '../../firebase/config';
+import { Product } from '../../models/Producto';
 
 export default function ClienteHome() {
   const [productos, setProductos] = useState<Product[]>([]);

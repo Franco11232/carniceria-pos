@@ -1,3 +1,4 @@
+//PedidoItem.tsx
 import React from 'react';
 import { Button, Text, View } from 'react-native';
 
@@ -9,7 +10,7 @@ export default function ProductoItem({ item, carrito, setCarrito }: any) {
         carrito.map((c: any) =>
           c.id === item.id ? { ...c, cantidad: c.cantidad + 1, subtotal: (c.cantidad + 1) * c.precio } : c
         )
-      );
+      );  
     } else {
       setCarrito([...carrito, { ...item, cantidad: 1, subtotal: item.precio }]);
     }

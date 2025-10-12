@@ -1,8 +1,9 @@
+//CocinaScreen.tsx
 import { collection, doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import React, { useEffect, useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
-import { db } from '../firebase/config';
-import Pedido from '../models/Pedido';
+import { db } from '../../firebase/config';
+import Pedido from '../../models/Pedido';
 
 export default function CocinaScreen() {
   const [pedidos, setPedidos] = useState<Pedido[]>([]);

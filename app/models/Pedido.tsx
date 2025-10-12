@@ -1,3 +1,4 @@
+//Pedido.tsx
 export default interface Pedido {
   id?: string;
   userId: string;
