@@ -3,6 +3,7 @@ import { collection, doc, onSnapshot, updateDoc } from "firebase/firestore";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   FlatList,
+  Image,
   Pressable,
   SafeAreaView,
   StyleSheet,
@@ -10,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { db } from "../../firebase/config";
+import { getProductImage } from "../../utils/imageRegistry"; // <-- usa tu helper centralizado
 
 type ItemA = { productId?: string; nombre: string; cantidad: number; precio: number; subtotal?: number };
 type ItemB = { id?: string; name: string; qtyKg: number; priceKg: number; subtotal?: number };
@@ -69,6 +71,10 @@ export default function PedidosScreen() {
   const [tab, setTab] = useState<TabKey>("pago");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // ---- productos para poder resolver imágenes de los items ----
+  const [productos, setProductos] = useState<any[]>([]);
+
+  // suscripción a órdenes
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "orders"), (snap) => {
       const data = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as OrderDoc[];
@@ -81,6 +87,14 @@ export default function PedidosScreen() {
     });
     return unsub;
   }, [selectedId]);
+
+  // suscripción a productos (para lookup de imágenes)
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "productos"), (snap) => {
+      setProductos(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+    });
+    return unsub;
+  }, []);
 
   const pendientes = useMemo(
     () => orders.filter((o) => (o.estado ?? "pendiente") === "pendiente" || o.estado === "cocina"),
@@ -112,6 +126,35 @@ export default function PedidosScreen() {
     });
   };
 
+  // ---- lookups para encontrar el producto de cada item ----
+  const normKey = (s: string) => s?.toLowerCase?.().trim().replace(/\s+/g, " ") ?? "";
+
+  const prodById = useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const p of productos) m[String(p.id)] = p;
+    return m;
+  }, [productos]);
+
+  const prodByName = useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const p of productos) m[normKey(p?.nombre || "")] = p;
+    return m;
+  }, [productos]);
+
+  const findProductForItem = (it: AnyItem) => {
+    // soporta orders nuevas (productId o id) y antiguas (match por nombre)
+    const pid = (it as any).productId ?? (it as any).id;
+    if (pid && prodById[pid]) return prodById[pid];
+    const n = (it as any).nombre ?? (it as any).name;
+    if (n && prodByName[normKey(String(n))]) return prodByName[normKey(String(n))];
+    return null;
+  };
+
+  const getOrderItemImage = (it: AnyItem) => {
+    const p = findProductForItem(it);
+    return p ? getProductImage(p) : null; // respeta imageKey / url / fallbacks por categoría
+  };
+
   const OrderCardMini = ({ o }: { o: OrderDoc }) => {
     const total = typeof o.subtotal === "number"
       ? o.subtotal
@@ -140,7 +183,8 @@ export default function PedidosScreen() {
     if (!currentForPay) return <Text style={styles.emptyText}>No hay pedidos pendientes.</Text>;
 
     const o = currentForPay;
-    const items = (o.items || []).map(norm);
+    const rawItems = o.items || [];
+    const items = rawItems.map(norm);
     const subtotal = typeof o.subtotal === "number" ? o.subtotal : items.reduce((s, it) => s + it.subtotal, 0);
     const iva = subtotal * 0.16;
     const total = subtotal + iva;
@@ -152,19 +196,27 @@ export default function PedidosScreen() {
         <Text style={styles.customerName}>{getCustomerName(o)}</Text>
         <Text style={styles.orderFolio}>{folioStr}</Text>
 
-        {items.map((it, idx) => (
-          <View key={idx} style={styles.itemRow}>
-            <View style={styles.circleImgStub} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.itemName}>{it.name}</Text>
-              <Text style={styles.itemMetaText}>{`${it.qty.toFixed(3)} Kg`}</Text>
+        {rawItems.map((raw, idx) => {
+          const it = items[idx];               // normalizado (qty/price/subtotal)
+          const imgSrc = getOrderItemImage(raw);
+          return (
+            <View key={idx} style={styles.itemRow}>
+              {imgSrc ? (
+                <Image source={imgSrc} style={styles.circleImg} resizeMode="cover" />
+              ) : (
+                <View style={styles.circleImgStub} />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.itemName}>{it.name}</Text>
+                <Text style={styles.itemMetaText}>{`${it.qty.toFixed(3)} Kg`}</Text>
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text style={styles.itemMetaText}>{money(it.price)}</Text>
+                <Text style={styles.itemMetaText}>{money(it.subtotal)}</Text>
+              </View>
             </View>
-            <View style={{ alignItems: "flex-end" }}>
-              <Text style={styles.itemMetaText}>{money(it.price)}</Text>
-              <Text style={styles.itemMetaText}>{money(it.subtotal)}</Text>
-            </View>
-          </View>
-        ))}
+          );
+        })}
 
         <View style={styles.divider} />
         <Text style={styles.totalLine}>Total {money(total)} mxn</Text>
@@ -393,10 +445,11 @@ const styles = StyleSheet.create({
     borderBottomColor: "#E5E5E5",
   },
   circleImgStub: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#EEE" },
+  circleImg: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#EEE" }, // <— nueva imagen circular
   itemName: { color: "#222", fontWeight: "600" },
   itemMetaText: { color: "#555", fontSize: 12 },
 
-  divider: { height: 1, backgroundColor: "#E5E5E5", marginTop: 6, marginBottom: 6 },
+  divider: { height: 1, backgroundColor: "#E5E55", marginTop: 6, marginBottom: 6 },
 
   totalLine: { textAlign: "center", fontWeight: "700", fontSize: 18, color: "#111", marginTop: 4 },
   totalDetail: { textAlign: "center", color: "#666" },
@@ -443,4 +496,5 @@ const styles = StyleSheet.create({
 
   emptyText: { color: "#666", textAlign: "center", marginTop: 20 },
 });
+
 

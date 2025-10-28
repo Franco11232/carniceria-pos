@@ -17,7 +17,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import { db } from "../../firebase/config";
 
@@ -28,7 +28,7 @@ type ItemInv = {
   stock: number;
 };
 
-const CATS = ["pollo", "res", "cerdo"] as const;
+const CATS = ["pollo", "res", "cerdo","pescado", "embutido"] as const;
 
 export default function InventarioScreen() {
   const [inventario, setInventario] = useState<ItemInv[]>([]);
@@ -172,28 +172,6 @@ export default function InventarioScreen() {
                 placeholderTextColor="#777"
               />
 
-              <Text style={styles.label}>Categoría</Text>
-              <View style={styles.catRow}>
-                {CATS.map((c) => {
-                  const active = c === categoria;
-                  return (
-                    <Pressable
-                      key={c}
-                      onPress={() => setCategoria(c)}
-                      style={[styles.catChip, active && styles.catChipActive]}
-                    >
-                      <Text
-                        style={[
-                          styles.catText,
-                          active && styles.catTextActive,
-                        ]}
-                      >
-                        {c}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
 
               <Text style={styles.label}>Stock (kg)</Text>
               <View style={styles.qtyRow}>
@@ -421,6 +399,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     overflow: "hidden",
   },
+
+  catRowScroll: {
+  flexDirection: "row",
+  gap: 8,
+  paddingHorizontal: 2,
+},
+
+
   itemStock: { color: "#444", fontSize: 12 },
 
   itemActions: { flexDirection: "row", gap: 16 },
