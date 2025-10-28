@@ -1,10 +1,5 @@
 // app/screens/carnicero/PedidosScreen.tsx
-import {
-  collection,
-  doc,
-  onSnapshot,
-  updateDoc,
-} from "firebase/firestore";
+import { collection, doc, onSnapshot, updateDoc } from "firebase/firestore";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   FlatList,
@@ -16,14 +11,14 @@ import {
 } from "react-native";
 import { db } from "../../firebase/config";
 
-// ====== Tipos tolerantes (dos esquemas de items) ======
 type ItemA = { productId?: string; nombre: string; cantidad: number; precio: number; subtotal?: number };
 type ItemB = { id?: string; name: string; qtyKg: number; priceKg: number; subtotal?: number };
 type AnyItem = ItemA | ItemB;
 
 type OrderDoc = {
   id: string;
-  cliente?: string;
+  cliente?: string;          // legacy
+  customerName?: string;     // nuevo
   folio?: string | number;
   createdAt?: number;
   estado?: "pendiente" | "cocina" | "pagado" | "completado";
@@ -32,22 +27,40 @@ type OrderDoc = {
   items: AnyItem[];
 };
 
-// Normaliza un item a un formato único
-function norm(it: AnyItem) {
+const norm = (it: AnyItem) => {
   const name = (it as any).nombre ?? (it as any).name ?? "Producto";
   const qty = (it as any).cantidad ?? (it as any).qtyKg ?? 1;
   const price = (it as any).precio ?? (it as any).priceKg ?? 0;
   const subtotal = (it as any).subtotal ?? Number(qty) * Number(price);
   return { name: String(name), qty: Number(qty), price: Number(price), subtotal: Number(subtotal) };
-}
+};
 
-// Utilidad
 const money = (n: number) =>
   Number(n || 0).toLocaleString("es-MX", {
     style: "currency",
     currency: "MXN",
     maximumFractionDigits: 1,
   });
+
+// --- helpers para nombre y folio ---
+const getCustomerName = (o: OrderDoc) =>
+  (o.customerName ?? o.cliente ?? "Cliente");
+
+const toNum = (f: any): number | null => {
+  const n = Number(f);
+  return Number.isFinite(n) ? n : null;
+};
+const fmt2 = (n: number) => (n % 100).toString().padStart(2, "0");
+const stableFolio = (o: OrderDoc) => {
+  // si el doc trae folio, úsalo; si no, derivar estable de su id
+  const given = toNum(o.folio);
+  if (given) return fmt2(given);
+  // hash simple de id -> 01..99
+  let acc = 0;
+  const s = o.id || "";
+  for (let i = 0; i < s.length; i++) acc = (acc + s.charCodeAt(i)) % 97;
+  return fmt2((acc % 99) + 1);
+};
 
 type TabKey = "pago" | "pedidos" | "completado";
 
@@ -56,14 +69,11 @@ export default function PedidosScreen() {
   const [tab, setTab] = useState<TabKey>("pago");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // ====== Carga en tiempo real ======
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "orders"), (snap) => {
       const data = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as OrderDoc[];
-      // Orden cronológico (recientes arriba)
       data.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
       setOrders(data);
-      // Seleccionar automáticamente el primero que esté pendiente/cocina en pestaña Pago
       if (!selectedId && data.length) {
         const firstPending = data.find((o) => (o.estado ?? "pendiente") === "pendiente" || o.estado === "cocina");
         setSelectedId(firstPending?.id ?? data[0].id);
@@ -72,7 +82,6 @@ export default function PedidosScreen() {
     return unsub;
   }, [selectedId]);
 
-  // ====== Derivados por pestaña ======
   const pendientes = useMemo(
     () => orders.filter((o) => (o.estado ?? "pendiente") === "pendiente" || o.estado === "cocina"),
     [orders]
@@ -85,14 +94,12 @@ export default function PedidosScreen() {
     [pendientes, selectedId]
   );
 
-  // ====== Acciones ======
   const marcarPagado = async (orderId: string, metodo: "efectivo" | "tarjeta" | "ambos") => {
     await updateDoc(doc(db, "orders", orderId), {
       estado: "pagado",
       metodoPago: metodo,
       pagadoEn: Date.now(),
     });
-    // mover selección al siguiente pendiente
     const next = pendientes.find((o) => o.id !== orderId);
     setSelectedId(next?.id ?? null);
     setTab("pedidos");
@@ -105,19 +112,21 @@ export default function PedidosScreen() {
     });
   };
 
-  // ====== Render de tarjetas ======
   const OrderCardMini = ({ o }: { o: OrderDoc }) => {
     const total = typeof o.subtotal === "number"
       ? o.subtotal
       : (o.items || []).reduce((s, it) => s + norm(it).subtotal, 0);
-    const totalItems = (o.items || []).reduce((s, it) => s + norm(it).qty, 0);
+    const totalItems = (o.items || []).length; // número de productos
 
+    const folioStr = `#${stableFolio(o)}`;
     return (
       <Pressable
         onPress={() => { setSelectedId(o.id); setTab("pago"); }}
         style={styles.miniCard}
       >
-        <Text style={styles.miniTitle}>{`#${o.folio ?? o.id?.slice(-4)} ${o.cliente ?? ""}`.trim()}</Text>
+        <Text style={styles.miniTitle}>
+          {`${folioStr} ${getCustomerName(o)}`.trim()}
+        </Text>
         <View style={styles.badgeRow}>
           <View style={[styles.badge, styles.badgeTime]}><Text style={styles.badgeText}>•</Text></View>
           <Text style={styles.metaText}>{totalItems} prod.</Text>
@@ -127,25 +136,22 @@ export default function PedidosScreen() {
     );
   };
 
-  // ====== Vista de detalle (pestaña PAGO) ======
   const renderPago = () => {
-    if (!currentForPay) {
-      return <Text style={styles.emptyText}>No hay pedidos pendientes.</Text>;
-    }
+    if (!currentForPay) return <Text style={styles.emptyText}>No hay pedidos pendientes.</Text>;
 
     const o = currentForPay;
     const items = (o.items || []).map(norm);
     const subtotal = typeof o.subtotal === "number" ? o.subtotal : items.reduce((s, it) => s + it.subtotal, 0);
     const iva = subtotal * 0.16;
     const total = subtotal + iva;
-    const totalItems = items.reduce((s, it) => s + it.qty, 0);
+    const totalItems = items.length; // número de productos
+    const folioStr = `Orden ${stableFolio(o)}`;
 
     return (
       <View style={styles.payWrap}>
-        <Text style={styles.customerName}>{o.cliente ?? "Cliente"}</Text>
-        <Text style={styles.orderFolio}>{`Orden #${o.folio ?? o.id?.slice(-6)}`}</Text>
+        <Text style={styles.customerName}>{getCustomerName(o)}</Text>
+        <Text style={styles.orderFolio}>{folioStr}</Text>
 
-        {/* Lista de productos del pedido */}
         {items.map((it, idx) => (
           <View key={idx} style={styles.itemRow}>
             <View style={styles.circleImgStub} />
@@ -160,13 +166,11 @@ export default function PedidosScreen() {
           </View>
         ))}
 
-        {/* Totales */}
         <View style={styles.divider} />
         <Text style={styles.totalLine}>Total {money(total)} mxn</Text>
         <Text style={styles.totalDetail}>IVA incluido {money(iva)}</Text>
         <Text style={styles.totalDetail}>{totalItems} productos</Text>
 
-        {/* Métodos de pago */}
         <View style={styles.payRow}>
           <Pressable style={styles.payBtn} onPress={() => marcarPagado(o.id, "efectivo")}>
             <Text style={styles.payIcon}>💵</Text>
@@ -185,7 +189,6 @@ export default function PedidosScreen() {
     );
   };
 
-  // ====== Vista de lista: pagados (en preparación/entrega) ======
   const renderPagados = () => {
     if (!pagados.length) return <Text style={styles.emptyText}>No hay pedidos por completar.</Text>;
     return (
@@ -193,29 +196,33 @@ export default function PedidosScreen() {
         data={pagados}
         keyExtractor={(o) => o.id}
         contentContainerStyle={{ paddingBottom: 40 }}
-        renderItem={({ item }) => (
-          <View style={styles.ticket}>
-            <Text style={styles.ticketTitle}>{`#${item.folio ?? item.id.slice(-6)} ${item.cliente ?? ""}`}</Text>
-            {(item.items || []).slice(0, 3).map((it, idx) => {
-              const n = norm(it);
-              return (
-                <Text key={idx} style={styles.ticketLine}>
-                  {`${n.name} · ${n.qty.toFixed(3)}kg`}
-                </Text>
-              );
-            })}
-            <View style={styles.ticketActions}>
-              <Pressable style={styles.completeBtn} onPress={() => marcarCompletado(item.id)}>
-                <Text style={styles.completeText}>Marcar completado</Text>
-              </Pressable>
+        renderItem={({ item }) => {
+          const folioStr = `#${stableFolio(item)}`;
+          return (
+            <View style={styles.ticket}>
+              <Text style={styles.ticketTitle}>
+                {`${folioStr} ${getCustomerName(item)}`.trim()}
+              </Text>
+              {(item.items || []).slice(0, 3).map((it, idx) => {
+                const n = norm(it);
+                return (
+                  <Text key={idx} style={styles.ticketLine}>
+                    {`${n.name} · ${n.qty.toFixed(3)}kg`}
+                  </Text>
+                );
+              })}
+              <View style={styles.ticketActions}>
+                <Pressable style={styles.completeBtn} onPress={() => marcarCompletado(item.id)}>
+                  <Text style={styles.completeText}>Marcar completado</Text>
+                </Pressable>
+              </View>
             </View>
-          </View>
-        )}
+          );
+        }}
       />
     );
   };
 
-  // ====== Vista historial completados ======
   const renderCompletados = () => {
     if (!completados.length) return <Text style={styles.emptyText}>Aún no hay completados.</Text>;
     return (
@@ -223,32 +230,33 @@ export default function PedidosScreen() {
         data={completados}
         keyExtractor={(o) => o.id}
         contentContainerStyle={{ paddingBottom: 40 }}
-        renderItem={({ item }) => (
-          <View style={styles.historyRow}>
-            <Text style={styles.historyTitle}>{`#${item.folio ?? item.id.slice(-6)} ${item.cliente ?? ""}`}</Text>
-            <Text style={styles.historyMeta}>
-              {money(
-                typeof item.subtotal === "number"
-                  ? item.subtotal * 1.16
-                  : (item.items || []).reduce((s, i) => s + norm(i).subtotal, 0) * 1.16
-              )}
-            </Text>
-            <Text style={styles.historyMetaSmall}>
-              Método: {item.metodoPago ?? "—"}
-            </Text>
-          </View>
-        )}
+        renderItem={({ item }) => {
+          const folioStr = `#${stableFolio(item)}`;
+          const totalConIva =
+            typeof item.subtotal === "number"
+              ? item.subtotal * 1.16
+              : (item.items || []).reduce((s, i) => s + norm(i).subtotal, 0) * 1.16;
+          return (
+            <View style={styles.historyRow}>
+              <Text style={styles.historyTitle}>
+                {`${folioStr} ${getCustomerName(item)}`.trim()}
+              </Text>
+              <Text style={styles.historyMeta}>{money(totalConIva)}</Text>
+              <Text style={styles.historyMetaSmall}>
+                Método: {item.metodoPago ?? "—"}
+              </Text>
+            </View>
+          );
+        }}
       />
     );
   };
 
   return (
     <SafeAreaView style={styles.root}>
-      {/* decor rojo */}
       <View style={styles.topDecor} />
-
-      {/* Header + pestañas */}
       <Text style={styles.headerTitle}>Pedidos</Text>
+
       <View style={styles.tabs}>
         <Pressable onPress={() => setTab("pago")} style={[styles.tabChip, tab === "pago" && styles.tabActive]}>
           <Text style={[styles.tabLabel, tab === "pago" && styles.tabLabelActive]}>Pago</Text>
@@ -261,11 +269,9 @@ export default function PedidosScreen() {
         </Pressable>
       </View>
 
-      {/* Contenido por pestaña */}
       <View style={{ flex: 1 }}>
         {tab === "pago" && (
           <>
-            {/* lista lateral mini (pendientes) */}
             {pendientes.length > 0 && (
               <FlatList
                 horizontal
@@ -277,18 +283,28 @@ export default function PedidosScreen() {
                 style={{ maxHeight: 96 }}
               />
             )}
-            <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>{renderPago()}</View>
+            <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+              {renderPago()}
+            </View>
           </>
         )}
 
-        {tab === "pedidos" && <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>{renderPagados()}</View>}
-        {tab === "completado" && <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>{renderCompletados()}</View>}
+        {tab === "pedidos" && (
+          <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+            {renderPagados()}
+          </View>
+        )}
+
+        {tab === "completado" && (
+          <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+            {renderCompletados()}
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
 }
 
-// ====== Estilos ======
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#FFFFFF" },
 
@@ -325,14 +341,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: "#fff",
   },
-  tabActive: {
-    backgroundColor: "#FFEB86",
-    borderColor: "#FFEB86",
-  },
+  tabActive: { backgroundColor: "#FFEB86", borderColor: "#FFEB86" },
   tabLabel: { color: "#333" },
   tabLabelActive: { fontWeight: "700" },
 
-  // mini cards (pendientes)
   miniCard: {
     backgroundColor: "#fff",
     borderRadius: 12,
@@ -344,7 +356,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 4,
-    minWidth: 180,
+    minWidth: 200,
   },
   miniTitle: { fontWeight: "700", color: "#111", marginBottom: 6 },
   badgeRow: { flexDirection: "row", alignItems: "center", gap: 8 },
@@ -359,7 +371,6 @@ const styles = StyleSheet.create({
   badgeText: { color: "#3A6DFF", fontWeight: "700" },
   metaText: { color: "#555" },
 
-  // detalle pago
   payWrap: {
     backgroundColor: "#fff",
     borderRadius: 14,
@@ -381,30 +392,16 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "#E5E5E5",
   },
-  circleImgStub: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "#EEE",
-  },
+  circleImgStub: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#EEE" },
   itemName: { color: "#222", fontWeight: "600" },
   itemMetaText: { color: "#555", fontSize: 12 },
 
-  divider: {
-    height: 1,
-    backgroundColor: "#E5E5E5",
-    marginTop: 6,
-    marginBottom: 6,
-  },
+  divider: { height: 1, backgroundColor: "#E5E5E5", marginTop: 6, marginBottom: 6 },
 
   totalLine: { textAlign: "center", fontWeight: "700", fontSize: 18, color: "#111", marginTop: 4 },
   totalDetail: { textAlign: "center", color: "#666" },
 
-  payRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 16,
-  },
+  payRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 16 },
   payBtn: {
     flex: 1,
     backgroundColor: "#fff",
@@ -418,7 +415,6 @@ const styles = StyleSheet.create({
   payIcon: { fontSize: 28, marginBottom: 8 },
   payLabel: { color: "#000", fontWeight: "600" },
 
-  // tickets pagados
   ticket: {
     backgroundColor: "#fff",
     borderRadius: 12,
@@ -430,15 +426,9 @@ const styles = StyleSheet.create({
   ticketTitle: { fontWeight: "700", color: "#111", marginBottom: 8 },
   ticketLine: { color: "#333", paddingVertical: 2 },
   ticketActions: { marginTop: 10, alignItems: "flex-end" },
-  completeBtn: {
-    backgroundColor: "#000",
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-  },
+  completeBtn: { backgroundColor: "#000", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 },
   completeText: { color: "#fff", fontWeight: "700" },
 
-  // historial
   historyRow: {
     backgroundColor: "#fff",
     borderRadius: 12,
@@ -451,7 +441,6 @@ const styles = StyleSheet.create({
   historyMeta: { color: "#333", marginTop: 4 },
   historyMetaSmall: { color: "#666", marginTop: 2, fontSize: 12 },
 
-  // vacíos
   emptyText: { color: "#666", textAlign: "center", marginTop: 20 },
 });
 
